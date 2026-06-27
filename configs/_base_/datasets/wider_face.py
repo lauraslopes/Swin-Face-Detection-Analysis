@@ -20,7 +20,7 @@ train_pipeline = [
         type='MinIoURandomCrop',
         min_ious=(0.1, 0.3, 0.5, 0.7, 0.9),
         min_crop_size=0.3),
-    dict(type='Resize', img_scale=(300, 300), keep_ratio=False),
+    dict(type='Resize', img_scale=(480, 640), keep_ratio=False),
     dict(type='Normalize', **img_norm_cfg),
     dict(type='RandomFlip', flip_ratio=0.5),
     dict(type='DefaultFormatBundle'),
@@ -30,7 +30,7 @@ test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(
         type='MultiScaleFlipAug',
-        img_scale=(300, 300),
+        img_scale=(480, 640),
         flip=False,
         transforms=[
             dict(type='Resize', keep_ratio=False),
@@ -40,7 +40,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=60,
+    samples_per_gpu=5,
     workers_per_gpu=2,
     train=dict(
         type='RepeatDataset',

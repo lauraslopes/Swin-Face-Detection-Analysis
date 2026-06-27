@@ -1,6 +1,6 @@
 _base_ = [
     '../_base_/models/cascade_mask_rcnn_swin_fpn.py',
-    '../_base_/datasets/coco_instance.py',
+    '../_base_/datasets/wider_face.py',
     '../_base_/schedules/schedule_1x.py', '../_base_/default_runtime.py'
 ]
 
@@ -13,7 +13,7 @@ model = dict(
         ape=False,
         drop_path_rate=0.2,
         patch_norm=True,
-        use_checkpoint=False
+        use_checkpoint=True
     ),
     neck=dict(in_channels=[96, 192, 384, 768]),
     roi_head=dict(
@@ -26,7 +26,7 @@ model = dict(
                 conv_out_channels=256,
                 fc_out_channels=1024,
                 roi_feat_size=7,
-                num_classes=80,
+                num_classes=1,
                 bbox_coder=dict(
                     type='DeltaXYWHBBoxCoder',
                     target_means=[0., 0., 0., 0.],
@@ -45,7 +45,7 @@ model = dict(
                 conv_out_channels=256,
                 fc_out_channels=1024,
                 roi_feat_size=7,
-                num_classes=80,
+                num_classes=1,
                 bbox_coder=dict(
                     type='DeltaXYWHBBoxCoder',
                     target_means=[0., 0., 0., 0.],
@@ -64,7 +64,7 @@ model = dict(
                 conv_out_channels=256,
                 fc_out_channels=1024,
                 roi_feat_size=7,
-                num_classes=80,
+                num_classes=1,
                 bbox_coder=dict(
                     type='DeltaXYWHBBoxCoder',
                     target_means=[0., 0., 0., 0.],
@@ -89,26 +89,23 @@ train_pipeline = [
          policies=[
              [
                  dict(type='Resize',
-                      img_scale=[(480, 1333), (512, 1333), (544, 1333), (576, 1333),
-                                 (608, 1333), (640, 1333), (672, 1333), (704, 1333),
-                                 (736, 1333), (768, 1333), (800, 1333)],
+                      img_scale=[(480, 640), (512, 640), (544, 640), (576, 640),
+                                 (608, 640), (640, 640)],
                       multiscale_mode='value',
                       keep_ratio=True)
              ],
              [
                  dict(type='Resize',
-                      img_scale=[(400, 1333), (500, 1333), (600, 1333)],
+                      img_scale=[(300, 640), (400, 640), (500, 640)],
                       multiscale_mode='value',
                       keep_ratio=True),
                  dict(type='RandomCrop',
                       crop_type='absolute_range',
-                      crop_size=(384, 600),
+                      crop_size=(256, 480),
                       allow_negative_crop=True),
                  dict(type='Resize',
-                      img_scale=[(480, 1333), (512, 1333), (544, 1333),
-                                 (576, 1333), (608, 1333), (640, 1333),
-                                 (672, 1333), (704, 1333), (736, 1333),
-                                 (768, 1333), (800, 1333)],
+                      img_scale=[(480, 640), (512, 640), (544, 640),
+                                 (576, 640), (608, 640), (640, 640)],
                       multiscale_mode='value',
                       override=True,
                       keep_ratio=True)
@@ -129,12 +126,13 @@ lr_config = dict(step=[27, 33])
 runner = dict(type='EpochBasedRunnerAmp', max_epochs=36)
 
 # do not use mmdet version fp16
-fp16 = None
-optimizer_config = dict(
-    type="DistOptimizerHook",
-    update_interval=1,
-    grad_clip=None,
-    coalesce=True,
-    bucket_size_mb=-1,
-    use_fp16=True,
-)
+#fp16 = None
+#optimizer_config = dict(
+#    type="DistOptimizerHook",
+#    update_interval=1,
+#    grad_clip=None,
+#    coalesce=True,
+#    bucket_size_mb=-1,
+#    use_fp16=True,
+#)
+optimizer_config = dict(grad_clip=None)

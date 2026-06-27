@@ -1,0 +1,12 @@
+[submodule "SwinFace/apex"]
+	path = SwinFace/apex
+	url = https://github.com/NVIDIA/apex
+[submodule "mmcv"]
+	path = mmcv
+	url = https://github.com/open-mmlab/mmcv.git
+[submodule "mmdetection"]
+	path = mmdetection
+	url = https://github.com/open-mmlab/mmdetection.git
+[submodule "apex"]
+	path = apex
+	url = https://github.com/NVIDIA/apex

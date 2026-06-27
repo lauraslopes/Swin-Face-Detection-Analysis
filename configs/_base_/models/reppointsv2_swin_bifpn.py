@@ -32,7 +32,7 @@ model = dict(
     ),
     bbox_head=dict(
         type='RepPointsV2Head',
-        num_classes=80,
+        num_classes=1,
         in_channels=256,
         feat_channels=256,
         point_feat_channels=256,

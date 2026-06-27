@@ -1,6 +1,6 @@
 _base_ = [
     '../_base_/models/reppointsv2_swin_bifpn.py',
-    '../_base_/datasets/coco_detection.py',
+    '../_base_/datasets/wider_face.py',
     '../_base_/schedules/schedule_1x.py', '../_base_/default_runtime.py'
 ]
 model = dict(
@@ -12,7 +12,7 @@ model = dict(
         ape=False,
         drop_path_rate=0.2,
         patch_norm=True,
-        use_checkpoint=False
+        use_checkpoint=True
     ),
     neck=dict(in_channels=[192, 384, 768]),
 )
@@ -25,10 +25,8 @@ train_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations', with_bbox=True),
     dict(type='Resize',
-         img_scale=[(480, 1333), (512, 1333), (544, 1333), (576, 1333),
-                    (608, 1333), (640, 1333), (672, 1333), (704, 1333),
-                    (736, 1333), (768, 1333), (800, 1333), (832, 1333),
-                    (864, 1333), (896, 1333), (928, 1333), (960, 1333)],
+         img_scale=[(480, 640), (512, 640), (544, 640), (576, 640),
+                    (608, 640), (640, 640)],
          multiscale_mode='value',
          keep_ratio=True),
     dict(type='RandomFlip', flip_ratio=0.5),
@@ -48,14 +46,16 @@ optimizer = dict(_delete_=True, type='AdamW', lr=0.0001, betas=(0.9, 0.999), wei
 lr_config = dict(step=[27, 33])
 runner = dict(type='EpochBasedRunnerAmp', max_epochs=36)
 
-fp16 = None
-optimizer_config = dict(
-    type="DistOptimizerHook",
-    update_interval=1,
-    grad_clip=None,
-    coalesce=True,
-    bucket_size_mb=-1,
-    use_fp16=True,
-)
+#fp16 = None
+#optimizer_config = dict(
+#    type="DistOptimizerHook",
+#    update_interval=1,
+#    grad_clip=None,
+#    coalesce=True,
+#    bucket_size_mb=-1,
+#    use_fp16=True,
+#)
+
+optimizer_config = dict(grad_clip=None)
 
 evaluation = dict(metric=['bbox'])

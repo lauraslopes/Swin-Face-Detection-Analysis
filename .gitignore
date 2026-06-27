@@ -1,3 +1,8 @@
+data/
+outputs/
+wider-face-pascal-voc-annotations/
+SwinFace/datasets
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
