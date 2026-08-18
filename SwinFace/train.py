@@ -1,23 +1,18 @@
 import argparse
 import logging
 import os
-from itertools import cycle
 import math
 
+from SwinFace.analysis.verification import LandmarkVerification, HeadPoseVerification, ExpressionVerification
 from torch import distributed
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
 
-from dataset import get_dataloader
-from losses import CombinedMarginLoss
 from lr_scheduler import build_scheduler
-from partial_fc import PartialFC, PartialFCAdamW
 from analysis import *
-from analysis import subnets
 from model import build_model
 
-from utils.utils_callbacks import CallBackLogging, CallBackVerification
+from utils.utils_callbacks import CallBackLogging
 from utils.utils_config import get_config
 from utils.utils_logging import AverageMeter, init_logging
 from utils.utils_distributed_sampler import setup_seed
@@ -57,55 +52,24 @@ def main(args):
         else None
     )
 
-    # Recognition dataloader (commented out for head-only training)
-    '''
-    train_loader = get_dataloader(
-        cfg.rec,
-        args.local_rank,
-        cfg.batch_size,
-        cfg.dali,
-        cfg.seed,
-        cfg.num_workers
-    )
-    '''
-    # train_loader = get_analysis_train_dataloader("recognition", cfg, args.local_rank)
-    # Analysis dataloaders (only keep expression and head_pose active)
-    # age_gender_train_loader = get_analysis_train_dataloader("age_gender", cfg, args.local_rank)
-    # CelebA_train_loader = get_analysis_train_dataloader("CelebA", cfg, args.local_rank)
-    expression_train_loader = get_analysis_train_dataloader("expression", cfg, args.local_rank)
-    head_pose_train_loader = get_analysis_train_dataloader("head_pose", cfg, args.local_rank)
-
+    landmarks_train_loader = get_analysis_train_dataloader("landmarks", cfg)
+    expression_train_loader = get_analysis_train_dataloader("expression", cfg)
+    head_pose_train_loader = get_analysis_train_dataloader("headpose", cfg)
     model = build_model(cfg).cuda()
 
     model = torch.nn.parallel.DistributedDataParallel(
-        module=model, broadcast_buffers=False, device_ids=[args.local_rank], bucket_cap_mb=16,
+        module=model, broadcast_buffers=False, device_ids=[args.local_rank], bucket_cap_mb=16, 
         find_unused_parameters=True)
     model.train()
 
     # For head-only training, compute total batch using only expression and head_pose
-    # (keep original line commented for reference)
-    # cfg.total_batch_size = world_size * (cfg.recognition_bz + cfg.age_gender_bz + cfg.CelebA_bz + cfg.expression_bz + cfg.head_pose_bz)
-    cfg.total_batch_size = world_size * (cfg.expression_bz + cfg.head_pose_bz)
-    cfg.epoch_step = len(expression_train_loader)
+    cfg.total_batch_size = world_size * (cfg.expression_bz + cfg.head_pose_bz + cfg.landmark_bz)
 
     cfg.num_epoch = math.ceil(cfg.total_step / cfg.epoch_step)
-
-    #cfg.total_recognition_bz = cfg.recognition_bz * world_size
-    #cfg.warmup_step = cfg.num_image // cfg.total_recognition_bz * cfg.warmup_epoch
-    #cfg.total_step = cfg.num_image // cfg.total_recognition_bz * cfg.num_epoch
 
     cfg.lr = cfg.lr * cfg.total_batch_size / 512.0
     cfg.warmup_lr = cfg.warmup_lr * cfg.total_batch_size / 512.0
     cfg.min_lr = cfg.min_lr * cfg.total_batch_size / 512.0
-
-    # Recognition loss (commented out: training focuses on head tasks only)
-    # margin_loss = CombinedMarginLoss(
-    #     64,
-    #     cfg.margin_list[0],
-    #     cfg.margin_list[1],
-    #     cfg.margin_list[2],
-    #     cfg.interclass_filtering_threshold
-    # )
 
     # Analysis task losses for the 3-task training run (expression + landmarks + head pose)
     criteria = [
@@ -115,12 +79,6 @@ def main(args):
     ]
 
     if cfg.optimizer == "sgd":
-        # PartialFC and recognition branch commented out (not training recognition)
-        # module_partial_fc = PartialFC(
-        #     margin_loss, cfg.embedding_size, cfg.num_classes,
-        #     cfg.sample_rate, cfg.fp16)
-        # module_partial_fc.train().cuda()
-        # TODO the params of partial fc must be last in the params list
         opt = torch.optim.SGD(
             params=[{"params": model.module.backbone.parameters(), 'lr': cfg.lr / 10},
                     {"params": model.module.fam.parameters()},
@@ -130,11 +88,6 @@ def main(args):
             lr=cfg.lr, momentum=0.9, weight_decay=cfg.weight_decay)
 
     elif cfg.optimizer == "adamw":
-        # PartialFC and recognition branch commented out (not training recognition)
-        # module_partial_fc = PartialFCAdamW(
-        #     margin_loss, cfg.embedding_size, cfg.num_classes,
-        #     cfg.sample_rate, cfg.fp16)
-        # module_partial_fc.train().cuda()
         opt = torch.optim.AdamW(
             params=[{"params": model.module.backbone.parameters(), 'lr': cfg.lr / 10},
                     {"params": model.module.fam.parameters()},
@@ -159,8 +112,7 @@ def main(args):
     if cfg.init:
         dict_checkpoint = torch.load(os.path.join(cfg.init_model, f"start_{rank}.pt"))
         model.module.backbone.load_state_dict(dict_checkpoint["state_dict_backbone"],
-                                              strict=False)  # only load backbone!
-        # module_partial_fc.load_state_dict(dict_checkpoint["state_dict_softmax_fc"])                                  
+                                              strict=False)  # only load backbone!                                 
         del dict_checkpoint
 
     if cfg.resume:
@@ -178,7 +130,6 @@ def main(args):
         global_step += 1
 
         model.module.backbone.load_state_dict(dict_checkpoint["state_dict_backbone"])
-        # module_partial_fc.load_state_dict(dict_checkpoint["state_dict_softmax_fc"])  # commented: not using recognition
         model.module.fam.load_state_dict(dict_checkpoint["state_dict_fam"])
         model.module.tss.load_state_dict(dict_checkpoint["state_dict_tss"])
         model.module.om.load_state_dict(dict_checkpoint["state_dict_om"])
@@ -190,21 +141,13 @@ def main(args):
         num_space = 25 - len(key)
         logging.info(": " + key + " " * num_space + str(value))
 
-    callback_verification = CallBackVerification(
-        val_targets=cfg.val_targets, rec_prefix=cfg.rec, summary_writer=summary_writer
-    )
-
-    #FGNet_loader = get_analysis_val_dataloader(data_choose="FGNet", config=cfg)
-    #LAP_loader = get_analysis_val_dataloader(data_choose="LAP", config=cfg)
-    #CelebA_loader = get_analysis_val_dataloader(data_choose="CelebA", config=cfg)
+    landmarks_test_loader = get_analysis_val_dataloader(data_choose="landmarks", config=cfg)
     expression_test_loader = get_analysis_val_dataloader(data_choose="expression", config=cfg)
-    head_pose_test_loader = get_analysis_val_dataloader(data_choose="head_pose", config=cfg)
+    head_pose_test_loader = get_analysis_val_dataloader(data_choose="headpose", config=cfg)
 
-    #FGNet_verification = FGNetVerification(data_loader=FGNet_loader, summary_writer=summary_writer)
-    #LAP_verification = LAPVerification(data_loader=LAP_loader, summary_writer=summary_writer)
-    #CelebA_verification = CelebAVerification(data_loader=CelebA_loader, summary_writer=summary_writer)
-    expression_verification = RAFVerification(data_loader=expression_test_loader, summary_writer=summary_writer)
-    head_pose_verification = AFLWVerification(data_loader=head_pose_test_loader, summary_writer=summary_writer)
+    expression_verification = ExpressionVerification(data_loader=expression_test_loader, summary_writer=summary_writer)
+    head_pose_verification = HeadPoseVerification(data_loader=head_pose_test_loader, summary_writer=summary_writer)
+    landmarks_verification = LandmarkVerification(data_loader=landmarks_test_loader, summary_writer=summary_writer)
 
     callback_logging = CallBackLogging(
         frequent=cfg.frequent,
@@ -212,27 +155,13 @@ def main(args):
         batch_size=cfg.batch_size,
         start_step=global_step,
         writer=summary_writer,
-        analysis_task_names=["Expression", "Landmarks", "Pose"]
+        analysis_task_names=["Expression", "Pose", "Landmarks"]
     )
 
     loss_am = AverageMeter()
-    recognition_loss_am = AverageMeter()
     analysis_loss_ams = [AverageMeter() for _ in range(3)]
 
     amp = torch.cuda.amp.grad_scaler.GradScaler(growth_interval=100)
-
-    '''
-    with torch.no_grad():
-        model.module.set_output_type("Recognition")
-        callback_verification(global_step, model)
-        model.module.set_output_type("Age")
-        FGNet_verification(global_step, model)
-        LAP_verification(global_step, model)
-        model.module.set_output_type("Attribute")
-        CelebA_verification(global_step, model)
-        model.module.set_output_type("Expression")
-        RAF_verification(global_step, model)
-    '''
 
     for epoch in range(start_epoch, cfg.num_epoch):
 
@@ -240,9 +169,11 @@ def main(args):
             expression_train_loader.sampler.set_epoch(epoch)
         if isinstance(head_pose_train_loader, DataLoader):
             head_pose_train_loader.sampler.set_epoch(epoch)
+        if isinstance(landmarks_train_loader, DataLoader):
+            landmarks_train_loader.sampler.set_epoch(epoch)
 
         # iterate only over expression and head_pose dataloaders
-        for idx, data in enumerate(zip(expression_train_loader, head_pose_train_loader)):
+        for idx, data in enumerate(zip(expression_train_loader, head_pose_train_loader, landmarks_train_loader)):
 
             # skip
             if cfg.resume:
@@ -251,45 +182,34 @@ def main(args):
 
             RAF = data[0]
             AFLW = data[1]
+            CelebA = data[2]
 
             expression_img, expression_label = RAF
             head_pose_img, head_pose_label = AFLW
+            landmarks_img, landmarks_label = CelebA
 
             expression_label = expression_label.cuda(non_blocking=True)
             head_pose_label = head_pose_label.cuda(non_blocking=True)
+            landmarks_label = landmarks_label.cuda(non_blocking=True)
+            
+            expr_bz = expression_img.size(0)
+            pose_bz = head_pose_img.size(0)
+            landmark_bz = landmarks_img.size(0)
 
-            analysis_labels = [
-                expression_label,
-                head_pose_label[:, :42],
-                head_pose_label[:, 42:]
-            ]
-
-            img = torch.cat([expression_img, head_pose_img], dim=0).cuda(non_blocking=True)
+            img = torch.cat([expression_img, head_pose_img, landmarks_img], dim=0).cuda(non_blocking=True)
 
             model.module.set_output_type("List")
             outputs = model(img)
 
-            # Recognition branch commented out (not training recognition)
-            #recognition_loss = torch.tensor(0.0, device=img.device)
-
-            analysis_losses = []
-
-            expr_count = expression_img.size(0)
-            aflwf_count = head_pose_img.size(0)
-            aflwf_start = expr_count
-            aflwf_end = expr_count + aflwf_count
-
-            # Expression classification on expression batch
-            expr_output = outputs[0][:expr_count]
-            analysis_losses.append(criteria[0](expr_output, analysis_labels[0]))
-
-            # Landmark regression on AFLW batch only
-            landmarks_output = outputs[1][aflwf_start:aflwf_end]
-            analysis_losses.append(criteria[1](landmarks_output, analysis_labels[1]))
-
-            # Pose regression on AFLW batch only
-            pose_output = outputs[2][aflwf_start:aflwf_end]
-            analysis_losses.append(criteria[2](pose_output, analysis_labels[2]))
+            expr_output = outputs[0][:expr_bz]
+            head_pose_output = outputs[1][expr_bz:expr_bz + pose_bz]
+            landmarks_output = outputs[2][expr_bz + pose_bz:expr_bz + pose_bz + landmark_bz]
+            
+            analysis_losses = [
+                criteria[0](expr_output, expression_label),
+                criteria[1](head_pose_output, head_pose_label),
+                criteria[2](landmarks_output, landmarks_label),
+            ]
 
             loss = torch.tensor(0.0, device=img.device)
             loss_weights = cfg.analysis_loss_weights[:3] if len(cfg.analysis_loss_weights) >= 3 else [1.0, 1.0, 1.0]
@@ -312,25 +232,18 @@ def main(args):
 
             with torch.no_grad():
                 loss_am.update(loss.item(), 1)
-                #recognition_loss_am.update(recognition_loss.item(), 1)
                 for j in range(3):
                     analysis_loss_ams[j].update(analysis_losses[j].item(), 1)
 
-                callback_logging(global_step, loss_am, recognition_loss_am, analysis_loss_ams, epoch, cfg.fp16,
+                callback_logging(global_step, loss_am, analysis_loss_ams, epoch, cfg.fp16,
                                  lr_scheduler.get_update_values(global_step)[0], amp)
 
                 if (global_step+1) % cfg.verbose == 0:
-                    # Recognition and age/attribute verifications commented for head-only training
-                    # model.module.set_output_type("Recognition")
-                    # callback_verification(global_step, model)
-                    # model.module.set_output_type("Age")
-                    # FGNet_verification(global_step, model)
-                    # LAP_verification(global_step, model)
-                    # model.module.set_output_type("Attribute")
-                    # CelebA_verification(global_step, model)
+                    model.module.set_output_type("Landmarks")
+                    landmarks_verification(global_step, model)
                     model.module.set_output_type("Expression")
                     expression_verification(global_step, model)
-                    model.module.set_output_type("List")
+                    model.module.set_output_type("Pose")
                     head_pose_verification(global_step, model)
 
             if cfg.save_all_states and (global_step+1) % cfg.save_verbose == 0:
@@ -340,7 +253,6 @@ def main(args):
                     "local_step": idx,
 
                     "state_dict_backbone": model.module.backbone.state_dict(),
-                    # "state_dict_softmax_fc": module_partial_fc.state_dict(),  # commented: not using recognition
                     "state_dict_fam": model.module.fam.state_dict(),
                     "state_dict_tss": model.module.tss.state_dict(),
                     "state_dict_om": model.module.om.state_dict(),
@@ -362,25 +274,9 @@ def main(args):
             pass
 
     with torch.no_grad():
-        # Recognition and age/attribute verification disabled for head-only training
-        # model.module.set_output_type("Recognition")
-        # callback_verification(global_step, model)
-        # model.module.set_output_type("Age")
-        # FGNet_verification(global_step, model)
-        # LAP_verification(global_step, model)
-        # model.module.set_output_type("Attribute")
-        # CelebA_verification(global_step, model)
-        model.module.set_output_type("Expression")
-        expression_verification(global_step, model)
-        model.module.set_output_type("List")
-        head_pose_verification(global_step, model)
-
-    # if rank == 0:
-    # path_module = os.path.join(cfg.output, "model.pt")
-    # torch.save(backbone.module.state_dict(), path_module)
-
-    # from torch2onnx import convert_onnx
-    # convert_onnx(backbone.module.cpu().eval(), path_module, os.path.join(cfg.output, "model.onnx"))
+        landmarks_verification(model, global_step)
+        expression_verification(model, global_step)
+        head_pose_verification(model, global_step)
 
     distributed.destroy_process_group()
 

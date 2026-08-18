@@ -118,6 +118,7 @@ data/WIDERFace/
 outputs/
 SwinFace/datasets
 SwinFace/output
+*nohup.out
 
 # Pytorch
 *.pth

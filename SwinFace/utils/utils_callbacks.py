@@ -9,7 +9,6 @@ from eval import verification
 from utils.utils_logging import AverageMeter
 from torch.utils.tensorboard import SummaryWriter
 from torch import distributed
-from analysis import ANALYSIS_TASKS
 
 class LimitedAvgMeter(object):
 
@@ -26,8 +25,6 @@ class LimitedAvgMeter(object):
                 self.avg = sum(self.num_list)/len_list
             else:
                 self.avg = sum(self.num_list[len_list-self.max_num:len_list])/self.max_num
-
-
 
 class CallBackVerification(object):
 
@@ -84,7 +81,7 @@ class CallBackLogging(object):
         self.start_step: int = start_step
         self.batch_size: int = batch_size
         self.writer = writer
-        self.analysis_task_names = analysis_task_names or ANALYSIS_TASKS
+        self.analysis_task_names = analysis_task_names
 
         self.init = False
         self.tic = 0
@@ -92,7 +89,6 @@ class CallBackLogging(object):
     def __call__(self,
                  global_step: int,
                  loss: AverageMeter,
-                 recognition_loss: AverageMeter,
                  analysis_losses: List,
                  epoch: int,
                  fp16: bool,
@@ -106,9 +102,6 @@ class CallBackLogging(object):
                 except ZeroDivisionError:
                     speed_total = float('inf')
 
-                # time_now = (time.time() - self.time_start) / 3600
-                # time_total = time_now / ((global_step + 1) / self.total_step)
-                # time_for_end = time_total - time_now
                 time_now = time.time()
                 time_sec = int(time_now - self.time_start)
                 time_sec_avg = time_sec / (global_step - self.start_step + 1)
@@ -118,18 +111,15 @@ class CallBackLogging(object):
                     self.writer.add_scalar('time_for_end', time_for_end, global_step)
                     self.writer.add_scalar('learning_rate', learning_rate, global_step)
                     self.writer.add_scalar('loss', loss.avg, global_step)
-                    #self.writer.add_scalar('recognition_loss', recognition_loss.avg, global_step)
 
                     for j in range(len(analysis_losses)):
-                        task_name = self.analysis_task_names[j] if j < len(self.analysis_task_names) else ANALYSIS_TASKS[j]
+                        task_name = self.analysis_task_names[j]
                         self.writer.add_scalar(task_name + ' Training Loss', analysis_losses[j].avg,
                                                global_step)
 
-                #msg = "Speed %.2f samples/sec   Loss %.4f   Recognition Loss %.4f   " % (
-                #          speed_total, loss.avg, recognition_loss.avg)
                 msg = "Speed %.2f samples/sec   Loss %.4f  " % (speed_total, loss.avg)
                 for j in range(len(analysis_losses)):
-                    task_name = self.analysis_task_names[j] if j < len(self.analysis_task_names) else ANALYSIS_TASKS[j]
+                    task_name = self.analysis_task_names[j]
                     temp = task_name + " Loss %.4f   " % (analysis_losses[j].avg) + "   "
                     msg += temp
 
@@ -145,12 +135,8 @@ class CallBackLogging(object):
 
                 logging.info(msg)
                 loss.reset()
-                recognition_loss.reset()
                 for each in analysis_losses:
                     each.reset()
-                
-                
-                
                 
                 self.tic = time.time()
             else:

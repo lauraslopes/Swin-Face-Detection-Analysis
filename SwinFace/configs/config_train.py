@@ -1,75 +1,53 @@
 from easydict import EasyDict as edict
+from torchvision.transforms import InterpolationMode
 
 config = edict()
 # -----------------------------------------------------------------------------
 # Data settings
 # -----------------------------------------------------------------------------
 
-# Recognition val targets
-config.val_targets = ['lfw', 'cfp_fp', "agedb_30", 'calfw', 'cplfw']
+# Landmark datasets
+config.CelebA_data = "/experiments/shared_face_rec_pep/CelebA/"
+config.CelebA_train_label = "/experiments/shared_face_rec_pep/CelebA/list_landmarks_train.txt"
+config.CelebA_test_label = "/experiments/shared_face_rec_pep/CelebA/list_landmarks_test.txt"
+config.CelebA_val_label = "/experiments/shared_face_rec_pep/CelebA/list_landmarks_val.txt"
 
-# Recognition data
-config.rec = "<your path>/data/faces_emore/"  #### Path for the training dataset
-config.num_classes = 85742
-config.num_image = 5822653
+config.MTFL_train_data = "/experiments/shared_face_rec_pep/MTFL"
+config.MTFL_train_label = "/experiments/shared_face_rec_pep/MTFL/training.txt"
+config.MTFL_test_data = "/experiments/shared_face_rec_pep/MTFL"
+config.MTFL_test_label = "/experiments/shared_face_rec_pep/MTFL/testing.txt"
 
-# Analysis data
-config.age_gender_data_path = "<your path>/data/AIO_train"
-config.age_gender_data_list = ["IMDB", "WIKI", "Adience", "MORPH"]
+# Head pose datasets
+config.AFLW_train_data = "/experiments/shared_face_rec_pep/AFLW/data/flickr"
+config.AFLW_train_label = "/experiments/shared_face_rec_pep/AFLW/data/flickr/aflw_train.txt"
+config.AFLW_val_data = "/experiments/shared_face_rec_pep/AFLW/data/flickr/"
+config.AFLW_val_label = "/experiments/shared_face_rec_pep/AFLW/data/flickr/aflw_val.txt"
+config.AFLW_test_data = "/experiments/shared_face_rec_pep/AFLW/data/flickr"
+config.AFLW_test_label = "/experiments/shared_face_rec_pep/AFLW/data/flickr/aflw_test.txt"
 
-config.CelebA_train_data = "<your path>/data/CelebA/data"
-config.CelebA_train_label = "<your path>/data/AIO_train/CelebA/label.txt"
-config.CelebA_val_data = "<your path>/data/CelebA/data"
-config.CelebA_val_label = "<your path>/data/AIO_val/CelebA/label.txt"
-config.CelebA_test_data = "<your path>/data/CelebA/data"
-config.CelebA_test_label = "<your path>/data/AIO_test/CelebA/label.txt"
+config.WLP_data_train = "/experiments/shared_face_rec_pep/300W_LP21/train"
+config.WLP_data_test = "/experiments/shared_face_rec_pep/300W_LP21/test"
 
-config.head_pose_train_data = "/experiments/shared_face_rec_pep/AFLW/data/flickr"
-config.head_pose_train_label = "/experiments/shared_face_rec_pep/AFLW/data/flickr/aflw_train.txt"
-config.head_pose_val_data = "/experiments/shared_face_rec_pep/AFLW/data/flickr/"
-config.head_pose_val_label = "/experiments/shared_face_rec_pep/AFLW/data/flickr/aflw_val.txt"
-config.head_pose_test_data = "/experiments/shared_face_rec_pep/AFLW/data/flickr"
-config.head_pose_test_label = "/experiments/shared_face_rec_pep/AFLW/data/flickr/aflw_test.txt"
-
-config.FGnet_data = "<your path>/data/AIO_val/FGnet/data"
-config.FGnet_label = "<your path>/data/AIO_val/FGnet/label.txt"
-
+# Expression datasets
 config.RAF_data_train = "/experiments/shared_face_rec_pep/RAF_DB/train"
-config.RAF_data_test = "/experiments/shared_face_rec_pep/RAF_DB/test"
 config.RAF_label_train = "/experiments/shared_face_rec_pep/RAF_DB/train_labels.csv"
+config.RAF_data_test = "/experiments/shared_face_rec_pep/RAF_DB/test"
 config.RAF_label_test = "/experiments/shared_face_rec_pep/RAF_DB/test_labels.csv"
 
-# AffectNet human_annotated train/validation layout
-# AffectNet human_annotated layout: separate images and per-image json annotations
 config.AffectNet_train_data = "/experiments/shared_face_rec_pep/AffectNet+/human_annotated/train_set/images"
 config.AffectNet_train_label = "/experiments/shared_face_rec_pep/AffectNet+/human_annotated/train_set/annotations"
 config.AffectNet_val_data = "/experiments/shared_face_rec_pep/AffectNet+/human_annotated/validation_set/images"
 config.AffectNet_val_label = "/experiments/shared_face_rec_pep/AffectNet+/human_annotated/validation_set/annotations"
 
-config.W_LP_data = "/experiments/shared_face_rec_pep/300W_LP21"
-
-config.LAP_train_data = "<your path>/data/AIO_test/LAP_finetuning/data"
-config.LAP_train_label = "<your path>/data/AIO_test/LAP_finetuning/label.csv"
-config.LAP_test_data = "<your path>/data/AIO_test/LAP_test/data"
-config.LAP_test_label = "<your path>/data/AIO_test/LAP_test/label.csv"
-
-config.CLAP_train_data = "<your path>/data/AIO_test/LAP_finetuning/data"
-config.CLAP_train_label = "<your path>/data/AIO_test/LAP_finetuning/label.csv"
-config.CLAP_val_data = "<your path>/data/AIO_test/LAP_test/data"
-config.CLAP_val_label = "<your path>/data/AIO_test/LAP_test/label.csv"
-config.CLAP_test_data = "<your path>/data/LAP_test/test"
-config.CLAP_test_label = "<your path>/data/LAP_test/test.csv"
-
 # Data loading settings
 config.img_size = 112
-config.batch_size = 128
-config.recognition_bz = 32
-config.age_gender_bz = 32
-config.CelebA_bz = 32
+config.batch_size = 96
+config.landmark_bz = 32
 config.expression_bz = 32
 config.head_pose_bz = 32
 config.train_num_workers = 1
 config.train_pin_memory = True
+config.epoch_step = 100
 
 config.val_batch_size = 64
 config.val_num_workers = 1
@@ -77,7 +55,7 @@ config.val_pin_memory = True
 
 # Data argument
 
-config.INTERPOLATION = 'bicubic'
+config.INTERPOLATION = InterpolationMode.BICUBIC
 config.RAF_NUM_CLASSES = 7
 # Label Smoothing
 config.RAF_LABEL_SMOOTHING = 0.1
@@ -187,24 +165,3 @@ config.output = "/home/lslopes/Swin-Transformer-Object-Detection/SwinFace/output
 config.verbose = 2000
 config.save_verbose = 4000
 config.frequent = 10
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

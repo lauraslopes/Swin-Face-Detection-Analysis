@@ -163,7 +163,7 @@ class FeatureAttentionNet(torch.nn.Module):
 
 
 class FeatureAttentionModule(torch.nn.Module):
-    def __init__(self, branch_num=12, in_chans=2112, feature_dim=512, conv_shared=False, conv_mode="split", kernel_size=3,
+    def __init__(self, branch_num=3, in_chans=2112, feature_dim=512, conv_shared=False, conv_mode="split", kernel_size=3,
                  channel_attention="CBAM", spatial_attention=None, la_num_list=None, pooling="max"):
         super().__init__()
 
@@ -228,7 +228,7 @@ class TaskSpecificSubnet(torch.nn.Module):
         return self.feature(x)
 
 class TaskSpecificSubnets(torch.nn.Module):
-    def __init__(self, branch_num=12):
+    def __init__(self, branch_num=3):
         super().__init__()
 
         self.branch_num = branch_num
@@ -262,18 +262,16 @@ class TaskSpecificSubnets(torch.nn.Module):
 class OutputModule(torch.nn.Module):
     def __init__(self, feature_dim=512, output_type="Dict"):
         super().__init__()
-        self.output_sizes = [[7], [42], [3]]
-
+        self.output_sizes = [[7], [3], [10]] #expression, pose, landmarks
         self.output_fcs = nn.ModuleList()
-        for i in range(0, len(self.output_sizes)):
+
+        for i in range(len(self.output_sizes)):
             for j in range(len(self.output_sizes[i])):
                 output_fc = nn.Linear(feature_dim, self.output_sizes[i][j])
                 self.output_fcs.append(output_fc)
 
-        self.task_names = ['Expression', 'Landmarks', 'Pose']
-
+        self.task_names = ['Expression', 'Pose', 'Landmarks']
         self.output_type = output_type
-
         self.apply(self._init_weights)
 
     def set_output_type(self, output_type):
@@ -289,36 +287,36 @@ class OutputModule(torch.nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, x, embedding):
-
         outputs = []
-
         k = 0
+
         for i in range(0, len(self.output_sizes)):
             for j in range(len(self.output_sizes[i])):
                 output_fc = self.output_fcs[k]
                 output = output_fc(x[i])
+
+                # apply sigmoid only to the landmark head
+                if i == 2:  # landmarks task
+                    output = torch.sigmoid(output)
+
                 outputs.append(output)
                 k += 1
 
-        [expression, landmarks, pose] = outputs
+        [expression, pose, landmarks] = outputs
+        outputs = [expression, pose, landmarks]
+
+        outputs.append(embedding)
+
+        result = dict()
+        for j in range(3):
+            result[self.task_names[j]] = outputs[j]
 
         if self.output_type == "Dict":
-            result = {
-                self.task_names[0]: expression,
-                self.task_names[1]: landmarks,
-                self.task_names[2]: pose,
-                "HeadPose": torch.cat([landmarks, pose], dim=1)
-            }
             return result
         elif self.output_type == "List":
-            return [expression, landmarks, pose]
-        elif self.output_type == "Attribute":
-            return [expression, landmarks, pose]
+            return outputs
         else:
-            return {self.task_names[0]: expression,
-                    self.task_names[1]: landmarks,
-                    self.task_names[2]: pose,
-                    "HeadPose": torch.cat([landmarks, pose], dim=1)}[self.output_type]
+            return result[self.output_type]
 
 
 class ModelBox(torch.nn.Module):
