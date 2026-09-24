@@ -87,9 +87,17 @@ class DistributedSampler(_DistributedSampler):
         rank=None,  # local_rank
         shuffle=True,
         seed=0,
+        drop_last=False,
     ):
 
-        super().__init__(dataset, num_replicas=num_replicas, rank=rank, shuffle=shuffle)
+        super().__init__(
+            dataset,
+            num_replicas=num_replicas,
+            rank=rank,
+            shuffle=shuffle,
+            seed=seed,
+            drop_last=drop_last,
+        )
 
         # In distributed sampling, different ranks should sample
         # non-overlapped data in the dataset. Therefore, this function

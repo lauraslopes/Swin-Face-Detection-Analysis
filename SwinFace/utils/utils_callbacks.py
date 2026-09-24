@@ -93,7 +93,8 @@ class CallBackLogging(object):
                  epoch: int,
                  fp16: bool,
                  learning_rate: float,
-                 grad_scaler: torch.cuda.amp.GradScaler):
+                 grad_scaler: torch.cuda.amp.GradScaler,
+                 weighted_terms: List):
         if self.rank == 0 and global_step > 0 and (global_step+1) % self.frequent == 0:
             if self.init:
                 try:
@@ -120,7 +121,9 @@ class CallBackLogging(object):
                 msg = "Speed %.2f samples/sec   Loss %.4f  " % (speed_total, loss.avg)
                 for j in range(len(analysis_losses)):
                     task_name = self.analysis_task_names[j]
-                    temp = task_name + " Loss %.4f   " % (analysis_losses[j].avg) + "   "
+                    temp = task_name + " Loss %.4f   " % (analysis_losses[j].avg)
+                    if weighted_terms is not None:
+                        temp += "  Normalized Loss %.4f   " % (weighted_terms[j].avg)
                     msg += temp
 
                 if fp16:
@@ -137,7 +140,10 @@ class CallBackLogging(object):
                 loss.reset()
                 for each in analysis_losses:
                     each.reset()
-                
+                if weighted_terms is not None:
+                    for each in weighted_terms:
+                        each.reset()
+
                 self.tic = time.time()
             else:
                 self.init = True

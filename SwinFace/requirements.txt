@@ -1,6 +1,6 @@
 opencv-python
 torch
-timm
+timm>=0.6.13,<0.7
 tensorboard
 mxnet
 scikit-learn

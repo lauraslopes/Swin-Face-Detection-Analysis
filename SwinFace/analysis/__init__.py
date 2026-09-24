@@ -2,7 +2,6 @@
 from timm.data import create_transform
 
 import torch
-import numpy as np
 import torch.distributed as dist
 
 from typing import Iterable
@@ -10,60 +9,36 @@ from utils.utils_distributed_sampler import DistributedSampler
 from utils.utils_distributed_sampler import get_dist_info
 
 from .datasets import ExpressionDataset, HeadPoseDataset, LandmarkDataset
-from .samplers import SubsetRandomSampler
+from .subnets import Subnet
+
+
+def _timm_interpolation(config):
+    return getattr(config.INTERPOLATION, "value", config.INTERPOLATION)
 
 
 def get_analysis_train_dataloader(data_choose, config) -> Iterable:
 
+    transform = create_transform(
+        input_size=config.img_size,
+        interpolation=_timm_interpolation(config),
+        scale=config.AUG_SCALE_SCALE if config.AUG_SCALE_SET else None,
+        ratio=config.AUG_SCALE_RATIO if config.AUG_SCALE_SET else None,
+        is_training=True,
+        color_jitter=config.AUG_COLOR_JITTER if config.AUG_COLOR_JITTER > 0 else None,
+        auto_augment=config.AUG_AUTO_AUGMENT if config.AUG_AUTO_AUGMENT != 'none' else None,
+        re_prob=config.AUG_REPROB,
+        re_mode=config.AUG_REMODE,
+        re_count=config.AUG_RECOUNT,
+    )
+
     if data_choose == "landmarks":
         batch_size = config.landmark_bz
-        transform = create_transform(
-            input_size=config.img_size,
-            scale=config.AUG_SCALE_SCALE if config.AUG_SCALE_SET else None,
-            ratio=config.AUG_SCALE_RATIO if config.AUG_SCALE_SET else None,
-            is_training=True,
-            color_jitter=config.AUG_COLOR_JITTER if config.AUG_COLOR_JITTER > 0 else None,
-            auto_augment=config.AUG_AUTO_AUGMENT if config.AUG_AUTO_AUGMENT != 'none' else None,
-            re_prob=config.AUG_REPROB,
-            re_mode=config.AUG_REMODE,
-            re_count=config.AUG_RECOUNT,
-            mean=[0.5, 0.5, 0.5],
-            std=[0.5, 0.5, 0.5],
-        )
         dataset_train = LandmarkDataset(config=config, choose="train", transform=transform)
-
     elif data_choose == "expression":
         batch_size = config.expression_bz
-        transform = create_transform(
-            input_size=config.img_size,
-            scale=config.AUG_SCALE_SCALE if config.AUG_SCALE_SET else None,
-            ratio=config.AUG_SCALE_RATIO if config.AUG_SCALE_SET else None,
-            is_training=True,
-            color_jitter=config.AUG_COLOR_JITTER if config.AUG_COLOR_JITTER > 0 else None,
-            auto_augment=config.AUG_AUTO_AUGMENT if config.AUG_AUTO_AUGMENT != 'none' else None,
-            re_prob=config.AUG_REPROB,
-            re_mode=config.AUG_REMODE,
-            re_count=config.AUG_RECOUNT,
-            mean=[0.5, 0.5, 0.5],
-            std=[0.5, 0.5, 0.5],
-        )
         dataset_train = ExpressionDataset(config=config, choose="train", transform=transform)
-
     elif data_choose == "headpose":
         batch_size = config.head_pose_bz
-        transform = create_transform(
-            input_size=config.img_size,
-            scale=config.AUG_SCALE_SCALE if config.AUG_SCALE_SET else None,
-            ratio=config.AUG_SCALE_RATIO if config.AUG_SCALE_SET else None,
-            is_training=True,
-            color_jitter=config.AUG_COLOR_JITTER if config.AUG_COLOR_JITTER > 0 else None,
-            auto_augment=config.AUG_AUTO_AUGMENT if config.AUG_AUTO_AUGMENT != 'none' else None,
-            re_prob=config.AUG_REPROB,
-            re_mode=config.AUG_REMODE,
-            re_count=config.AUG_RECOUNT,
-            mean=[0.5, 0.5, 0.5],
-            std=[0.5, 0.5, 0.5],
-        )
         dataset_train = HeadPoseDataset(config=config, choose="train", transform=transform)
 
     rank, world_size = get_dist_info()
@@ -83,10 +58,9 @@ def get_analysis_train_dataloader(data_choose, config) -> Iterable:
 def get_analysis_val_dataloader(data_choose, config):
 
     transform = create_transform(
-            input_size=config.img_size,
-            mean=[0.5, 0.5, 0.5],
-            std=[0.5, 0.5, 0.5],
-        )
+        input_size=config.img_size,
+        interpolation=_timm_interpolation(config),
+    )
     
     if data_choose == "landmarks":
         dataset_val = LandmarkDataset(config=config, choose="test", transform=transform)
@@ -95,8 +69,13 @@ def get_analysis_val_dataloader(data_choose, config):
     elif data_choose == "headpose":
         dataset_val = HeadPoseDataset(config=config, choose="test", transform=transform)
 
-    indices = np.arange(dist.get_rank(), len(dataset_val), dist.get_world_size())
-    sampler_val = SubsetRandomSampler(indices)
+    sampler_val = DistributedSampler(
+        dataset_val,
+        num_replicas=dist.get_world_size(),
+        rank=dist.get_rank(),
+        shuffle=False,
+        drop_last=True,
+    )
 
     data_loader_val = torch.utils.data.DataLoader(
         dataset_val, sampler=sampler_val,

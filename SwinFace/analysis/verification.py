@@ -60,7 +60,8 @@ class LandmarkVerification(object):
             targets: (B, 10) tensor of target landmark coordinates
             
         Returns:
-            nme: scalar tensor representing the normalized mean error
+            overall_nme: scalar tensor representing the normalized mean error
+            point_nme: tensor containing one NME value for each landmark
         """
         # Reshape to (B, 5, 2) - 5 landmarks with (x, y) coordinates
         predictions_reshaped = predictions.reshape(-1, 5, 2)
@@ -82,16 +83,19 @@ class LandmarkVerification(object):
         interocular_dist = torch.clamp(interocular_dist, min=1e-8)
         normalized_distances = distances / interocular_dist.unsqueeze(1)  # (B, 5)
         
-        # Compute mean NME across all landmarks and samples
-        nme = torch.mean(normalized_distances)
+        # Compute NME for each landmark and across all landmarks.
+        point_nme = torch.mean(normalized_distances, dim=0)
+        nme = torch.mean(point_nme)
         
-        return nme
+        return nme, point_nme
 
     def ver_test(self, model, global_step):
 
         logging.info("Val on CelebA landmarks:")
 
         nme_meter = AverageMeter()
+        point_nme_meters = [AverageMeter() for _ in range(5)]
+        point_names = ['Left eye', 'Right eye', 'Nose', 'Left mouth', 'Right mouth']
         batch_time = AverageMeter()
 
         end = time.time()
@@ -103,13 +107,21 @@ class LandmarkVerification(object):
             else:
                 target = targets.float().cuda(non_blocking=True)
 
-            analysis_outputs = model(img)
+            with torch.no_grad():
+                analysis_outputs = model(img)
 
-            # Compute NME
-            nme = self._compute_nme(analysis_outputs, target)
+            # Compute NME (Normalized Mean Error) for landmark points
+            nme, point_nme = self._compute_nme(analysis_outputs, target)
             nme = reduce_tensor(nme)
+            point_nme = reduce_tensor(point_nme)
 
             nme_meter.update(nme.item(), target.size(0))
+            for point_index, point_value in enumerate(point_nme):
+                point_nme_meters[point_index].update(
+                    point_value.item(), target.size(0)
+                )
+
+            del img, target, analysis_outputs
 
             batch_time.update(time.time() - end)
             end = time.time()
@@ -120,6 +132,11 @@ class LandmarkVerification(object):
                     f'Test: [{idx}/{len(self.data_loader)}]\t'
                     f'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                     f'Landmark NME {nme_meter.val:.4f} ({nme_meter.avg:.4f})\t'
+                    f'Left eye {point_nme_meters[0].val:.4f} ({point_nme_meters[0].avg:.4f})\t'
+                    f'Right eye {point_nme_meters[1].val:.4f} ({point_nme_meters[1].avg:.4f})\t'
+                    f'Nose {point_nme_meters[2].val:.4f} ({point_nme_meters[2].avg:.4f})\t'
+                    f'Left mouth {point_nme_meters[3].val:.4f} ({point_nme_meters[3].avg:.4f})\t'
+                    f'Right mouth {point_nme_meters[4].val:.4f} ({point_nme_meters[4].avg:.4f})\t'
                     f'Mem {memory_used:.0f}MB')
 
         if nme_meter.avg < self.best_nme:
@@ -134,6 +151,16 @@ class LandmarkVerification(object):
             self.summary_writer.add_scalar("CelebA Landmark 10 Times Avg NME", self.limited_meter.avg, global_step)
 
             logging.info('[%d]CelebA Landmark NME: %1.5f' % (global_step, nme_meter.avg))
+            for point_name, point_meter in zip(point_names, point_nme_meters):
+                self.summary_writer.add_scalar(
+                    f'CelebA Landmark NME - {point_name}',
+                    point_meter.avg,
+                    global_step,
+                )
+                logging.info(
+                    '[%d]%s NME: %1.5f' %
+                    (global_step, point_name, point_meter.avg)
+                )
             logging.info('[%d]CelebA Landmark NME-Best: %1.5f' % (global_step, self.best_nme))
             logging.info('[%d]10 Times Landmark NME: %1.5f' % (global_step, self.limited_meter.avg))
             logging.info('[%d]10 Times Landmark NME-Best: %1.5f' % (global_step, self.limited_meter.best))
@@ -161,16 +188,31 @@ class HeadPoseVerification(object):
         pose_meter = AverageMeter()
         batch_time = AverageMeter()
 
+        pose_mae_yaw = 0.0
+        pose_mae_pitch = 0.0
+        pose_mae_roll = 0.0
+
         end = time.time()
         for idx, (images, target) in enumerate(self.data_loader):
             img = images.cuda(non_blocking=True)
             pose_target = target.float().cuda(non_blocking=True)
+            with torch.no_grad():
+                pose_pred = model(img)
 
-            pose_pred = model(img)
+            pose_abs_error = torch.abs(pose_pred - pose_target)
+            pose_error = torch.mean(pose_abs_error)
+            pose_error = reduce_tensor(pose_error)
 
-            pose_error = torch.mean(torch.abs(pose_pred - pose_target))
-            pose_error = reduce_tensor(pose_error) #calculate the mean of the three euler angles
+            del img, pose_target, pose_pred
+
+            pose_mae_per_angle = torch.mean(pose_abs_error, dim=0)
+            pose_mae_per_angle = reduce_tensor(pose_mae_per_angle)
+
             pose_meter.update(pose_error.item(), target.size(0))
+            #pitch, yaw, roll
+            pose_mae_pitch = pose_mae_per_angle[0].item()
+            pose_mae_yaw = pose_mae_per_angle[1].item()
+            pose_mae_roll = pose_mae_per_angle[2].item()
 
             batch_time.update(time.time() - end)
             end = time.time()
@@ -181,6 +223,9 @@ class HeadPoseVerification(object):
                     f'Test: [{idx}/{len(self.data_loader)}]\t'
                     f'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                     f'Pose MAE {pose_meter.val:.3f} ({pose_meter.avg:.3f})\t'
+                    f'Yaw MAE {pose_mae_yaw:.3f}\t'
+                    f'Pitch MAE {pose_mae_pitch:.3f}\t'
+                    f'Roll MAE {pose_mae_roll:.3f}\t'
                     f'Mem {memory_used:.0f}MB')
 
         if pose_meter.avg < self.best_pose_mae:
@@ -193,10 +238,17 @@ class HeadPoseVerification(object):
             self.summary_writer.add_scalar(tag="AFLW Pose MAE", scalar_value=pose_meter.avg, global_step=global_step)
             self.summary_writer.add_scalar(tag="AFLW Pose MAE-Best", scalar_value=self.best_pose_mae, global_step=global_step)
             self.summary_writer.add_scalar(tag="AFLW 10 Times Avg MAE", scalar_value=self.limited_meter.avg, global_step=global_step)
+            self.summary_writer.add_scalar(tag="AFLW Pose MAE Yaw", scalar_value=pose_mae_yaw, global_step=global_step)
+            self.summary_writer.add_scalar(tag="AFLW Pose MAE Pitch", scalar_value=pose_mae_pitch, global_step=global_step)
+            self.summary_writer.add_scalar(tag="AFLW Pose MAE Roll", scalar_value=pose_mae_roll, global_step=global_step)
+
             logging.info('[%d]Pose MAE: %1.5f' % (global_step, pose_meter.avg))
             logging.info('[%d]Pose MAE-Best: %1.5f' % (global_step, self.best_pose_mae))
             logging.info('[%d]10 Times Avg MAE: %1.5f' % (global_step, self.limited_meter.avg))
             logging.info('[%d]10 Times Avg MAE-Best: %1.5f' % (global_step, self.limited_meter.best))
+            logging.info('[%d]Pose MAE Yaw: %1.5f' % (global_step, pose_mae_yaw))
+            logging.info('[%d]Pose MAE Pitch: %1.5f' % (global_step, pose_mae_pitch))
+            logging.info('[%d]Pose MAE Roll: %1.5f' % (global_step, pose_mae_roll))
 
     def __call__(self, num_update, model):
         model.eval()
@@ -231,7 +283,8 @@ class ExpressionVerification(object):
             img = images.cuda(non_blocking=True)
             target = target.cuda(non_blocking=True)
 
-            expression_output = model(img)
+            with torch.no_grad():
+                expression_output = model(img)
 
             loss = criterion(expression_output, target)
             acc1, acc3 = accuracy(expression_output, target, topk=(1, 3))
@@ -243,9 +296,12 @@ class ExpressionVerification(object):
             loss_meter.update(loss.item(), target.size(0))
             acc1_meter.update(acc1.item(), target.size(0))
             acc3_meter.update(acc3.item(), target.size(0))
+            
+            del img, target, expression_output
 
             batch_time.update(time.time() - end)
             end = time.time()
+        
 
             if idx % 10 == 0:
                 memory_used = torch.cuda.max_memory_allocated() / (1024.0 * 1024.0)

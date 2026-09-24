@@ -4,6 +4,7 @@ import os
 import math
 
 from SwinFace.analysis.verification import LandmarkVerification, HeadPoseVerification, ExpressionVerification
+from SwinFace.utils.multitask_loss import ScaleNormalizedMultiTaskLoss
 from torch import distributed
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -38,10 +39,11 @@ except KeyError:
 def main(args):
     # get config
     cfg = get_config(args.config)
+    local_rank = int(os.environ.get("LOCAL_RANK", args.local_rank))
     # global control random seed
     setup_seed(seed=cfg.seed, cuda_deterministic=False)
 
-    torch.cuda.set_device(args.local_rank)
+    torch.cuda.set_device(local_rank)
 
     os.makedirs(cfg.output, exist_ok=True)
     init_logging(rank, cfg.output)
@@ -58,8 +60,7 @@ def main(args):
     model = build_model(cfg).cuda()
 
     model = torch.nn.parallel.DistributedDataParallel(
-        module=model, broadcast_buffers=False, device_ids=[args.local_rank], bucket_cap_mb=16, 
-        find_unused_parameters=True)
+        module=model, broadcast_buffers=False, device_ids=[local_rank], bucket_cap_mb=16)
     model.train()
 
     # For head-only training, compute total batch using only expression and head_pose
@@ -75,7 +76,7 @@ def main(args):
     criteria = [
         torch.nn.CrossEntropyLoss(),
         torch.nn.MSELoss(),
-        torch.nn.MSELoss(),
+        torch.nn.MSELoss(), #Mean Squared Error
     ]
 
     if cfg.optimizer == "sgd":
@@ -106,11 +107,19 @@ def main(args):
         num_steps=cfg.total_step,
         warmup_steps=cfg.warmup_step)
 
+    task_names = ["Expression", "Pose", "Landmarks"]
+    #Loss normalizer
+    loss_normalizer = ScaleNormalizedMultiTaskLoss(
+            task_names=task_names,
+            priority_weights=cfg.analysis_loss_weights,
+        )
+
     start_epoch = 0
     global_step = 0
 
     if cfg.init:
-        dict_checkpoint = torch.load(os.path.join(cfg.init_model, f"start_{rank}.pt"))
+        #dict_checkpoint = torch.load(os.path.join(cfg.init_model, f"start_{rank}.pt"))
+        dict_checkpoint = torch.load(cfg.init_model)
         model.module.backbone.load_state_dict(dict_checkpoint["state_dict_backbone"],
                                               strict=False)  # only load backbone!                                 
         del dict_checkpoint
@@ -155,7 +164,7 @@ def main(args):
         batch_size=cfg.batch_size,
         start_step=global_step,
         writer=summary_writer,
-        analysis_task_names=["Expression", "Pose", "Landmarks"]
+        analysis_task_names=task_names
     )
 
     loss_am = AverageMeter()
@@ -195,24 +204,35 @@ def main(args):
             expr_bz = expression_img.size(0)
             pose_bz = head_pose_img.size(0)
             landmark_bz = landmarks_img.size(0)
-
+            
             img = torch.cat([expression_img, head_pose_img, landmarks_img], dim=0).cuda(non_blocking=True)
 
             model.module.set_output_type("List")
             outputs = model(img)
-
+            
             expr_output = outputs[0][:expr_bz]
             head_pose_output = outputs[1][expr_bz:expr_bz + pose_bz]
             landmarks_output = outputs[2][expr_bz + pose_bz:expr_bz + pose_bz + landmark_bz]
-            
+
+            '''
+            analysis_losses = {
+                    task_names[0]: criteria[0](expr_output, expression_label),
+                    task_names[1]: criteria[1](head_pose_output, head_pose_label),
+                    task_names[2]: criteria[2](landmarks_output, landmarks_label),
+                    
+                }
+            '''
+
             analysis_losses = [
-                criteria[0](expr_output, expression_label),
-                criteria[1](head_pose_output, head_pose_label),
-                criteria[2](landmarks_output, landmarks_label),
+                    criteria[0](expr_output, expression_label),
+                    criteria[1](head_pose_output, head_pose_label),
+                    criteria[2](landmarks_output, landmarks_label),
             ]
 
+            weighted_terms = None
+            #loss, weighted_terms = loss_normalizer(analysis_losses)
             loss = torch.tensor(0.0, device=img.device)
-            loss_weights = cfg.analysis_loss_weights[:3] if len(cfg.analysis_loss_weights) >= 3 else [1.0, 1.0, 1.0]
+            loss_weights = cfg.analysis_loss_weights[:3]
             for j in range(3):
                 loss += analysis_losses[j] * loss_weights[j]
 
@@ -232,11 +252,12 @@ def main(args):
 
             with torch.no_grad():
                 loss_am.update(loss.item(), 1)
-                for j in range(3):
+                for j, task in enumerate(task_names):
+                    #analysis_loss_ams[j].update(analysis_losses[task].item(), 1)
                     analysis_loss_ams[j].update(analysis_losses[j].item(), 1)
 
                 callback_logging(global_step, loss_am, analysis_loss_ams, epoch, cfg.fp16,
-                                 lr_scheduler.get_update_values(global_step)[0], amp)
+                                 lr_scheduler.get_update_values(global_step)[0], amp, weighted_terms)
 
                 if (global_step+1) % cfg.verbose == 0:
                     model.module.set_output_type("Landmarks")
@@ -274,9 +295,12 @@ def main(args):
             pass
 
     with torch.no_grad():
-        landmarks_verification(model, global_step)
-        expression_verification(model, global_step)
-        head_pose_verification(model, global_step)
+        model.module.set_output_type("Landmarks")
+        landmarks_verification(global_step, model)
+        model.module.set_output_type("Expression")
+        expression_verification(global_step, model)
+        model.module.set_output_type("Pose")
+        head_pose_verification(global_step, model)
 
     distributed.destroy_process_group()
 

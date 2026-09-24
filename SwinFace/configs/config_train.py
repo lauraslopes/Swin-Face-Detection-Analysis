@@ -41,17 +41,16 @@ config.AffectNet_val_label = "/experiments/shared_face_rec_pep/AffectNet+/human_
 
 # Data loading settings
 config.img_size = 112
-config.batch_size = 96
-config.landmark_bz = 32
-config.expression_bz = 32
-config.head_pose_bz = 32
-config.train_num_workers = 1
+config.batch_size = 128
+config.val_batch_size = 32
+config.landmark_bz = 128
+config.expression_bz = 128
+config.head_pose_bz = 128
+config.train_num_workers = 8
 config.train_pin_memory = True
-config.epoch_step = 100
-
-config.val_batch_size = 64
 config.val_num_workers = 1
 config.val_pin_memory = True
+config.epoch_step = 100
 
 # Data argument
 
@@ -106,9 +105,6 @@ config.fam = "3x3_2112_F_s_C_N_max"
 config.embedding_size = 512
 config.analysis_branch_num = 3
 
-# Training weights for the 3 active analysis tasks: Expression, Landmarks, Pose
-config.analysis_loss_weights = [1.0, 1.0, 1.0]
-
 # -----------------------------------------------------------------------------
 # Training settings
 # -----------------------------------------------------------------------------
@@ -117,11 +113,11 @@ config.analysis_loss_weights = [1.0, 1.0, 1.0]
 config.resume = False
 config.resume_step = 3999
 config.init = False
-config.init_model = "/home/lslopes/Swin-Transformer-Object-Detection/SwinFace/output/checkpoint_step_79999_gpu_0.pt"
+config.init_model = "/home/lslopes/Swin-Transformer-Object-Detection/SwinFace/output/checkpoint_step_99999_gpu_0_EMA.pt"
 
 # Step num
 config.warmup_step = 8000
-config.total_step = 80000
+config.total_step = 100000
 
 # SGD optimizer
 #config.optimizer = "sgd"
@@ -141,14 +137,8 @@ config.min_lr = 5e-6
 config.decay_epoch = 10 # Epoch interval to decay LR, used in StepLRScheduler
 config.decay_rate = 0.1 # LR decay rate, used in StepLRScheduler
 
-# Recognition loss
-config.margin_list = (1.0, 0.0, 0.4)
-config.sample_rate = 0.3 # Partial FC
-config.interclass_filtering_threshold = 0 # Partial FC
-
-# Loss weight
-config.recognition_loss_weight = 1.0
-config.analysis_loss_weights = [1.0, 1.0, 1.0]
+# Loss weight for the 3 active analysis tasks: Expression, HeadPose, Landmarks
+config.analysis_loss_weights = [1.0, 3.0, 70.0]
 
 # Others
 config.fp16 = True

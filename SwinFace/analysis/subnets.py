@@ -213,6 +213,53 @@ class FeatureAttentionModule(torch.nn.Module):
 
         return outputs
 
+class Subnet(torch.nn.Module):
+    """
+    Face-analysis subnet used only during the pre-training stage (pretrain.py),
+    before the Multi-Level Channel Attention (MLCA) module is introduced.
+
+    At this stage the backbone hasn't learned multi-level features yet, so each
+    subnet simply consumes the single top-layer feature map (FM4, shape
+    (B, in_chans, H, W)) instead of the multi-level fusion used later by
+    FeatureAttentionModule/TaskSpecificSubnets in model.py.
+
+    Architecture (Sec. III-A-3 of the paper, minus MLCA's multi-level fusion,
+    which isn't available yet at this point):
+        3x3 conv (in_chans -> num_features) + ReLU + max pool -> num_features-d vector
+        -> two consecutive FC(+ReLU+Dropout) layers             (TaskSpecificSubnet)
+        -> out_num independent FC heads, sized by out_features  (series of output FCs)
+    """
+
+    def __init__(self, in_chans=768, num_features=512, out_num=1, out_features=None, drop_rate=0.5):
+        super().__init__()
+
+        self.out_num = out_num
+
+        self.reduce = FeatureAttentionNet(
+            in_chans=in_chans, feature_dim=num_features, kernel_size=3,
+            conv_shared=False, conv_mode="normal",
+            channel_attention=None, spatial_attention=None, pooling="max")
+
+        self.feature = TaskSpecificSubnet(feature_dim=num_features, drop_rate=drop_rate)
+
+        self.output_fcs = nn.Linear(num_features, out_features)
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def forward(self, x):
+        x = self.reduce(x)     # (B, in_chans, H, W) -> (B, num_features)
+        x = self.feature(x)    # -> (B, num_features)
+        return self.output_fcs(x)
+
 class TaskSpecificSubnet(torch.nn.Module):
     def __init__(self, feature_dim=512, drop_rate=0.5):
         super().__init__()
@@ -295,7 +342,7 @@ class OutputModule(torch.nn.Module):
                 output_fc = self.output_fcs[k]
                 output = output_fc(x[i])
 
-                # apply sigmoid only to the landmark head
+                # normalized landmark regression: keep outputs in [0, 1]
                 if i == 2:  # landmarks task
                     output = torch.sigmoid(output)
 

@@ -1,7 +1,9 @@
 import json
+import argparse
 import torch
 import numpy as np
 import os
+import cv2
 
 from PIL import Image, ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -31,7 +33,13 @@ def _rescale_landmark_coords(label, image_size, target_size):
 
     return coords.reshape(-1)
 
-
+'''
+[lefteye_x, lefteye_y,
+ righteye_x, righteye_y,
+ nose_x, nose_y,
+ leftmouth_x, leftmouth_y,
+ rightmouth_x, rightmouth_y]
+'''
 class _CelebADataset(torch.utils.data.Dataset):
     def __init__(self, config, choose, transform):
 
@@ -69,13 +77,16 @@ class _CelebADataset(torch.utils.data.Dataset):
         img = self.transform(img)
         img = torch.tensor(np.asarray(img))
         label = _rescale_landmark_coords(self.labels[idx], original_size, self.target_size)
-        label = torch.tensor(label, dtype=torch.float32)
 
         return img, label
 
     def __len__(self):
         return len(self.image_paths)
-    
+
+'''
+[x1...x5,y1...y5]
+left eye, right eye, nose, left mouth corner, right mouth corner.
+ '''
 class _MTFLDataset(torch.utils.data.Dataset):
     def __init__(self, config, choose, transform):
 
@@ -103,7 +114,15 @@ class _MTFLDataset(torch.utils.data.Dataset):
                 self.image_paths.append(image_path)
 
                 raw_label = np.asarray([float(x) for x in line[1:11]], dtype=np.float32)
-                self.labels.append(raw_label)
+                # swap the order of landmarks to match CelebA format
+                swap_label = np.array([raw_label[0], raw_label[5],  # left eye
+                                      raw_label[1], raw_label[6],  # right eye
+                                      raw_label[2], raw_label[7],  # nose
+                                      raw_label[3], raw_label[8],  # left mouth
+                                      raw_label[4], raw_label[9],  # right mouth
+                                      ], dtype=np.float32)
+
+                self.labels.append(swap_label)
 
     def __getitem__(self, idx):
 
@@ -113,7 +132,6 @@ class _MTFLDataset(torch.utils.data.Dataset):
         img = self.transform(img)
         img = torch.tensor(np.asarray(img))
         label = _rescale_landmark_coords(self.labels[idx], original_size, self.target_size)
-        label = torch.tensor(label, dtype=torch.float32)
 
         return img, label
 
@@ -142,7 +160,6 @@ class LandmarkDataset(torch.utils.data.Dataset):
         img = self.transform(img)
         img = torch.tensor(np.asarray(img))
         label = _rescale_landmark_coords(self.labels[idx], original_size, self.target_size)
-        label = torch.tensor(label, dtype=torch.float32)
 
         return img, label
 
@@ -294,14 +311,14 @@ class _AFLWDataset(torch.utils.data.Dataset):
 
         for i, raw_line in enumerate(data):
             line = raw_line.strip().split()
-            if len(line) < 46:  # image_name + 45 values minimum
+            if len(line) < 85:  # image_name + 84 values minimum (landmarks)
                 continue
 
             image_name = line[0]
             try:
-                pose = np.array([float(line[j]) for j in range(43, 46)], dtype=np.float32)
+                roll, pitch, yaw = [float(x) for x in line[-3:]]
+                self.labels.append(np.array([pitch, yaw, roll], dtype=np.float32))
                 self.image_paths.append(os.path.join(self.AFLW_data, image_name))
-                self.labels.append(pose)
             except (ValueError, IndexError) as e:
                 print(f"Warning: Could not parse line {i}: {line[:6]}... Error: {e}")
                 continue
@@ -364,6 +381,7 @@ class _LP300WDataset(torch.utils.data.Dataset):
                     print(f"Warning: Failed to load mat file {mat_path}: {e}")
                     continue
 
+                # [pitch yaw roll tdx tdy tdz scale_factor] in radians
                 pose_para = mat.get('Pose_Para')
                 if pose_para is None:
                     print(f"Warning: Missing pt2d or Pose_Para in {mat_path}")
@@ -374,10 +392,10 @@ class _LP300WDataset(torch.utils.data.Dataset):
                 if pose.size < 3:
                     print(f"Warning: Unexpected Pose_Para shape {pose_para.shape} in {mat_path}")
                     continue
-                pose = pose[:3]
-
+                # Get [pitch, yaw, roll]
+                pitch, yaw, roll = pose[:3]
+                self.labels.append(np.array([pitch, yaw, roll], dtype=np.float32))
                 self.image_paths.append(image_path)
-                self.labels.append(pose)
 
         if len(self.image_paths) == 0:
             raise ValueError(f"No 300W_LP samples found in {self.LP300W_root}")
