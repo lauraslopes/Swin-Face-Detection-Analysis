@@ -41,11 +41,11 @@ config.AffectNet_val_label = "/experiments/shared_face_rec_pep/AffectNet+/human_
 
 # Data loading settings
 config.img_size = 112
-config.batch_size = 128
+config.batch_size = 32
 config.val_batch_size = 32
-config.landmark_bz = 128
-config.expression_bz = 128
-config.head_pose_bz = 128
+config.landmark_bz = 32
+config.expression_bz = 32
+config.head_pose_bz = 32
 config.train_num_workers = 8
 config.train_pin_memory = True
 config.val_num_workers = 1
@@ -112,8 +112,8 @@ config.analysis_branch_num = 3
 # Resume and init
 config.resume = False
 config.resume_step = 3999
-config.init = False
-config.init_model = "/home/lslopes/Swin-Transformer-Object-Detection/SwinFace/output/checkpoint_step_99999_gpu_0_EMA.pt"
+config.init = True
+config.init_model = "/home/lslopes/Swin-Transformer-Object-Detection/SwinFace/output/pretrain_checkpoint_epoch_24_gpu_0.pt"
 
 # Step num
 config.warmup_step = 8000

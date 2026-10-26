@@ -43,7 +43,7 @@ def get_analysis_train_dataloader(data_choose, config) -> Iterable:
 
     rank, world_size = get_dist_info()
     sampler_train = DistributedSampler(
-            dataset_train, num_replicas=world_size, rank=rank, shuffle=True, seed=config.seed)
+            dataset_train, num_replicas=world_size, rank=rank, shuffle=True, seed=config.seed, drop_last=True)
 
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,

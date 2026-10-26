@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
-
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
-CUDA_VISIBLE_DEVICES=1 torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 train.py configs/config_train
+export SWINFACE_WATCHDOG_TIMEOUT_MINUTES=30
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
+export NCCL_DEBUG=INFO
+export NCCL_ASYNC_ERROR_HANDLING=1
+export CUDA_VISIBLE_DEVICES=1
+torchrun --nproc_per_node=1 --nnodes=1 train.py configs/config_train

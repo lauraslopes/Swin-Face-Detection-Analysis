@@ -15,6 +15,7 @@ from utils.utils_callbacks import CallBackLogging, CallBackVerification
 from utils.utils_config import get_config
 from utils.utils_logging import AverageMeter, init_logging
 from utils.utils_distributed_sampler import setup_seed
+from utils.utils_watchdog import TrainingWatchdog, get_watchdog_timeout_minutes
 
 assert torch.__version__ >= "1.9.0", "In order to enjoy the features of the new torch, \
 we have upgraded the torch to 1.9.0. torch before than 1.9.0 may not work in the future."
@@ -99,6 +100,8 @@ def main(args):
 
     os.makedirs(cfg.output, exist_ok=True)
     init_logging(rank, cfg.output)
+    watchdog = TrainingWatchdog(get_watchdog_timeout_minutes(), rank)
+    watchdog.start()
 
     summary_writer = (
         SummaryWriter(log_dir=os.path.join(cfg.output, "tensorboard"))
@@ -250,6 +253,7 @@ def main(args):
             landmarks_train_loader.sampler.set_epoch(epoch)
 
         for _, data in enumerate(zip(expression_train_loader, headpose_train_loader, landmarks_train_loader)):
+            watchdog.beat(f"received training batch epoch={epoch}, step={global_step}")
 
             logging.info(str(global_step))
 
@@ -315,9 +319,11 @@ def main(args):
                 if (global_step+1) % cfg.verbose == 0:
                     #with torch.no_grad():
                     #callback_verification(global_step, backbone)
+                    watchdog.beat(f"starting validation epoch={epoch}, step={global_step}")
                     expression_verification(global_step, expression_verification_model)
                     headpose_verification(global_step, headpose_verification_model)
                     landmarks_verification(global_step, landmarks_verification_model)
+                    watchdog.beat(f"validation complete epoch={epoch}, step={global_step}")
 
             # update
             if global_step >= cfg.total_step - 1:
@@ -326,6 +332,7 @@ def main(args):
                 global_step += 1
 
         if cfg.save_all_states:
+            watchdog.beat(f"saving checkpoint epoch={epoch}, step={global_step}")
             checkpoint = {
                 "epoch": epoch + 1,
                 "global_step": global_step,
@@ -338,6 +345,7 @@ def main(args):
                 "state_lr_scheduler": lr_scheduler.state_dict()
             }
             torch.save(checkpoint, os.path.join(cfg.output, f"pretrain_checkpoint_epoch_{epoch}_gpu_{rank}.pt"))
+            watchdog.beat(f"checkpoint complete epoch={epoch}, step={global_step}")
 
 
         #if rank == 0:
@@ -346,6 +354,7 @@ def main(args):
 
     with torch.no_grad():
         #callback_verification(global_step, backbone)
+        watchdog.beat("starting final validation")
         expression_verification(global_step, expression_verification_model)
         headpose_verification(global_step, headpose_verification_model)
         landmarks_verification(global_step, landmarks_verification_model)
@@ -357,7 +366,9 @@ def main(args):
         from torch2onnx import convert_onnx
         convert_onnx(backbone.module.cpu().eval(), path_module, os.path.join(cfg.output, "model.onnx"))
 
+    watchdog.beat("destroying process group")
     distributed.destroy_process_group()
+    watchdog.stop()
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from utils.utils_callbacks import CallBackLogging
 from utils.utils_config import get_config
 from utils.utils_logging import AverageMeter, init_logging
 from utils.utils_distributed_sampler import setup_seed
+from utils.utils_watchdog import TrainingWatchdog, get_watchdog_timeout_minutes
 
 assert torch.__version__ >= "1.9.0", "In order to enjoy the features of the new torch, \
 we have upgraded the torch to 1.9.0. torch before than 1.9.0 may not work in the future."
@@ -47,6 +48,8 @@ def main(args):
 
     os.makedirs(cfg.output, exist_ok=True)
     init_logging(rank, cfg.output)
+    watchdog = TrainingWatchdog(get_watchdog_timeout_minutes(), rank)
+    watchdog.start()
 
     summary_writer = (
         SummaryWriter(log_dir=os.path.join(cfg.output, "tensorboard"))
@@ -60,7 +63,7 @@ def main(args):
     model = build_model(cfg).cuda()
 
     model = torch.nn.parallel.DistributedDataParallel(
-        module=model, broadcast_buffers=False, device_ids=[local_rank], bucket_cap_mb=16)
+        module=model, broadcast_buffers=False, device_ids=[local_rank], bucket_cap_mb=16, find_unused_parameters=True)
     model.train()
 
     # For head-only training, compute total batch using only expression and head_pose
@@ -183,6 +186,7 @@ def main(args):
 
         # iterate only over expression and head_pose dataloaders
         for idx, data in enumerate(zip(expression_train_loader, head_pose_train_loader, landmarks_train_loader)):
+            watchdog.beat(f"received training batch epoch={epoch}, step={global_step}")
 
             # skip
             if cfg.resume:
@@ -260,14 +264,17 @@ def main(args):
                                  lr_scheduler.get_update_values(global_step)[0], amp, weighted_terms)
 
                 if (global_step+1) % cfg.verbose == 0:
+                    watchdog.beat(f"starting validation epoch={epoch}, step={global_step}")
                     model.module.set_output_type("Landmarks")
                     landmarks_verification(global_step, model)
                     model.module.set_output_type("Expression")
                     expression_verification(global_step, model)
                     model.module.set_output_type("Pose")
                     head_pose_verification(global_step, model)
+                    watchdog.beat(f"validation complete epoch={epoch}, step={global_step}")
 
             if cfg.save_all_states and (global_step+1) % cfg.save_verbose == 0:
+                watchdog.beat(f"saving checkpoint epoch={epoch}, step={global_step}")
                 checkpoint = {
                     "epoch": epoch,
                     "global_step": global_step,
@@ -281,6 +288,7 @@ def main(args):
                     "state_lr_scheduler": lr_scheduler.state_dict()
                 }
                 torch.save(checkpoint, os.path.join(cfg.output, f"checkpoint_step_{global_step}_gpu_{rank}.pt"))
+                watchdog.beat(f"checkpoint complete epoch={epoch}, step={global_step}")
 
             # update
             if global_step >= cfg.total_step - 1:
@@ -295,6 +303,7 @@ def main(args):
             pass
 
     with torch.no_grad():
+        watchdog.beat("starting final validation")
         model.module.set_output_type("Landmarks")
         landmarks_verification(global_step, model)
         model.module.set_output_type("Expression")
@@ -302,7 +311,9 @@ def main(args):
         model.module.set_output_type("Pose")
         head_pose_verification(global_step, model)
 
+    watchdog.beat("destroying process group")
     distributed.destroy_process_group()
+    watchdog.stop()
 
 
 if __name__ == "__main__":
